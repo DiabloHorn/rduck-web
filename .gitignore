@@ -1,0 +1,12 @@
+# Ignore the entire certs, .vscode directory
+.vscode/
+certs/
+
+# Ignore the compiled binary
+/rduck-web
+
+# Ignore the generated p12 files
+*.p12
+
+# Ignore .DS_Store files (macOS)
+**/.DS_Store
