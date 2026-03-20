@@ -27,7 +27,7 @@ var revokedSerials = make(map[string]bool)
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: ./ddb-rawquery <path_to_db_file>")
+		fmt.Println("Usage: ./rduck-web <path_to_db_file>")
 		os.Exit(1)
 	}
 
