@@ -1,3 +1,5 @@
+// Package main implements rduck-web, a secure HTTP API for querying DuckDB databases.
+// It provides mTLS-protected endpoints for SQL queries and a web interface.
 package main
 
 import (
@@ -22,35 +24,42 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
-var db *sql.DB
-var revokedSerials = make(map[string]bool)
+var (
+	// db is the connection pool to the read-only DuckDB database
+	db *sql.DB
+	// revokedSerials maps revoked certificate serial numbers to true for quick lookup
+	revokedSerials = make(map[string]bool)
+)
 
 func main() {
+	// Parse command-line arguments and validate database path
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: ./rduck-web <path_to_db_file>")
 		os.Exit(1)
 	}
 
+	// Initialize PKI: generates or loads CA, server, and client certificates
 	tlsConfig, err := setupPKI()
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	dbPath := os.Args[1]
-	// Construct the DSN with the dynamic path and open in read-only mode
+	// Open the DuckDB database in read-only mode to prevent accidental data modifications
 	log.Printf("Loading database from: %s?access_mode=read_only", dbPath)
 	dsn := fmt.Sprintf("%s?access_mode=read_only", dbPath)
-	// 1. Open DuckDB in Read-Only mode
 	db, err = sql.Open("duckdb", dsn)
 	if err != nil {
 		traceError(err)
 	}
 	defer db.Close()
 
+	// Register HTTP handlers with mTLS-protected endpoints
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleUI)
-	mux.HandleFunc("/query", handleQuery)
+	mux.HandleFunc("/", handleUI)         // Minimal web UI for browser access
+	mux.HandleFunc("/query", handleQuery) // SQL query endpoint returning NDJSON
 
+	// Configure HTTPS server with mTLS certificate validation
 	server := &http.Server{
 		Addr:      "127.0.0.1:8443",
 		Handler:   mux,
@@ -70,6 +79,8 @@ func main() {
 	*/
 }
 
+// traceError logs a fatal error with stack trace information (function name, file, line number)
+// for better debugging. It only logs if err is not nil.
 func traceError(err error) {
 	if err != nil {
 		pc, file, line, _ := runtime.Caller(1)
@@ -78,33 +89,38 @@ func traceError(err error) {
 	}
 }
 
+// setupPKI initializes the Public Key Infrastructure for mTLS.
+// It generates CA, server, and client certificates on first run, or loads existing ones.
+// It also loads the revocation list and configures certificate validation.
 func setupPKI() (*tls.Config, error) {
-	// Get binary directory for relative paths
+	// Locate the certs directory relative to the binary location
 	exePath, _ := os.Executable()
 	baseDir := filepath.Dir(exePath)
 	certDir := filepath.Join(baseDir, "certs")
 	revocationFile := filepath.Join(certDir, "revoked.txt")
 
-	// Create certs if missing
+	// Generate all certificates if this is the first run
 	if _, err := os.Stat(certDir); os.IsNotExist(err) {
 		log.Println("Generating PKI in:", certDir)
 		if err := generateAllCerts(certDir); err != nil {
 			return nil, err
 		}
+		// Initialize empty revocation list file with instructions
 		os.WriteFile(revocationFile, []byte("# Add serial numbers here to revoke (one per line)\n"), 0644)
 	}
 
-	// Load Revocation List
+	// Load revoked certificate serial numbers into memory for fast validation lookups
 	log.Printf("Loading revocation list from: %s", revocationFile)
 	content, _ := os.ReadFile(revocationFile)
 	for _, line := range strings.Split(string(content), "\n") {
 		trimmed := strings.TrimSpace(line)
+		// Skip empty lines and comments
 		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
 			revokedSerials[trimmed] = true
 		}
 	}
 
-	// Load CA
+	// Load CA certificate for client certificate verification
 	log.Printf("Loading CA certificate from: %s", filepath.Join(certDir, "root", "ca.crt"))
 	caCert, _ := os.ReadFile(filepath.Join(certDir, "root", "ca.crt"))
 	caCertPool := x509.NewCertPool()
@@ -114,7 +130,7 @@ func setupPKI() (*tls.Config, error) {
 	serverCertPath := filepath.Join(certDir, "server", "server.crt")
 	serverKeyPath := filepath.Join(certDir, "server", "server.key")
 
-	// 2. Load the keypair into a tls.Certificate object
+	// Load the keypair into a tls.Certificate object
 	serverCert, err := tls.LoadX509KeyPair(serverCertPath, serverKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load server certificate: %v", err)
@@ -138,14 +154,15 @@ func setupPKI() (*tls.Config, error) {
 	}, nil
 }
 
-// --- Certificate Generation Helpers ---
-
+// generateAllCerts creates the complete PKI: a root CA, one server certificate, and 10 client certificates.
+// All certificates are stored in PEM format in the base directory structure.
 func generateAllCerts(base string) error {
 	os.MkdirAll(filepath.Join(base, "root"), 0755)
 	os.MkdirAll(filepath.Join(base, "server"), 0755)
 	os.MkdirAll(filepath.Join(base, "clients"), 0755)
 
-	// 1. Root CA
+	// 1. Generate Root Certificate Authority (CA)
+	// The CA signs all other certificates and is trusted by clients for verification
 	caPriv, _ := rsa.GenerateKey(rand.Reader, 4096)
 	caserialLimit := new(big.Int).Lsh(big.NewInt(1), 128) // 128-bit limit
 	caserial, err := rand.Int(rand.Reader, caserialLimit)
@@ -156,7 +173,7 @@ func generateAllCerts(base string) error {
 		SerialNumber:          caserial,
 		Subject:               pkix.Name{CommonName: "rduck-web-CA"},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(10, 0, 0),
+		NotAfter:              time.Now().AddDate(10, 0, 0), // 10-year validity
 		IsCA:                  true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
@@ -165,7 +182,8 @@ func generateAllCerts(base string) error {
 	savePEM(filepath.Join(base, "root", "ca.crt"), "CERTIFICATE", caBytes)
 	saveKey(filepath.Join(base, "root", "ca.key"), caPriv)
 
-	// 2. Server Cert
+	// 2. Generate Server Certificate
+	// Used by the HTTPS server to prove its identity to clients
 	srvPriv, _ := rsa.GenerateKey(rand.Reader, 2048)
 	serverserialLimit := new(big.Int).Lsh(big.NewInt(1), 128) // 128-bit limit
 	serverserial, err := rand.Int(rand.Reader, serverserialLimit)
@@ -175,9 +193,9 @@ func generateAllCerts(base string) error {
 	srvTmpl := &x509.Certificate{
 		SerialNumber: serverserial,
 		Subject:      pkix.Name{CommonName: "localhost"},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{"localhost"}, // Note: hardcoded for localhost; change for production
 		NotBefore:    time.Now(),
-		NotAfter:     time.Now().AddDate(1, 0, 0),
+		NotAfter:     time.Now().AddDate(1, 0, 0), // 1-year validity
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
@@ -185,7 +203,8 @@ func generateAllCerts(base string) error {
 	savePEM(filepath.Join(base, "server", "server.crt"), "CERTIFICATE", srvBytes)
 	saveKey(filepath.Join(base, "server", "server.key"), srvPriv)
 
-	// 3. 10 Clients
+	// 3. Generate 10 Client Certificates
+	// Each client certificate can be exported and distributed to users for mTLS authentication
 	for i := 1; i <= 10; i++ {
 		cPriv, _ := rsa.GenerateKey(rand.Reader, 2048)
 		serialLimit := new(big.Int).Lsh(big.NewInt(1), 128) // 128-bit limit
@@ -197,7 +216,7 @@ func generateAllCerts(base string) error {
 			SerialNumber: serial,
 			Subject:      pkix.Name{CommonName: fmt.Sprintf("client_%d", i)},
 			NotBefore:    time.Now(),
-			NotAfter:     time.Now().AddDate(1, 0, 0),
+			NotAfter:     time.Now().AddDate(1, 0, 0), // 1-year validity
 			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 			KeyUsage:     x509.KeyUsageDigitalSignature,
 		}
@@ -214,26 +233,32 @@ func generateAllCerts(base string) error {
 	return nil
 }
 
+// savePEM writes certificate bytes to a PEM-encoded file
 func savePEM(path, t string, b []byte) {
 	f, _ := os.Create(path)
 	pem.Encode(f, &pem.Block{Type: t, Bytes: b})
 }
 
+// saveKey saves an RSA private key to a PEM-encoded file
 func saveKey(path string, k *rsa.PrivateKey) {
 	f, _ := os.Create(path)
 	pem.Encode(f, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})
 }
 
+// handleQuery executes SQL queries and streams results as newline-delimited JSON (NDJSON).
+// This enables real-time result streaming for large result sets.
 func handleQuery(w http.ResponseWriter, r *http.Request) {
+	// Extract SQL query from URL parameter
 	query := r.URL.Query().Get("sql")
 	if query == "" {
 		http.Error(w, "Missing 'sql' parameter", 400)
 		return
 	}
 
+	// Execute the query with the request context for cancellation support
 	rows, err := db.QueryContext(r.Context(), query)
 	if err != nil {
-		// Send a 400 Bad Request with the specific SQL error message
+		// Return SQL errors as a JSON error response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -243,15 +268,16 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	// Set headers for streaming
+	// Configure response for streaming NDJSON (one JSON object per line)
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.WriteHeader(http.StatusOK)
 
 	encoder := json.NewEncoder(w)
 	cols, _ := rows.Columns()
 
+	// Stream each result row as a JSON object
 	for rows.Next() {
-		// Dynamic scanning into a map for "Full SQL" flexibility
+		// Use dynamic scanning into a map to handle arbitrary column types and counts
 		columns := make([]interface{}, len(cols))
 		columnPointers := make([]interface{}, len(cols))
 		for i := range columns {
@@ -262,19 +288,26 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Build a map of column names to values
 		m := make(map[string]interface{})
 		for i, colName := range cols {
 			m[colName] = columns[i]
 		}
 
-		// Stream the row immediately
+		// Immediately encode and flush each row for real-time streaming
 		encoder.Encode(m)
 		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
+			f.Flush() // Push data to client immediately
 		}
 	}
 }
 
+// handleUI returns a minimal HTML/CSS/JavaScript web interface for querying DuckDB.
+// It automatically loads the schema (tables and columns) in the sidebar and provides
+// a SQL editor with live results.
+// handleUI returns a minimal HTML/CSS/JavaScript web interface for querying DuckDB.
+// It automatically loads the schema (tables and columns) in the sidebar and provides
+// a SQL editor with live results.
 func handleUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, `
