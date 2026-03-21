@@ -65,4 +65,28 @@ Also, **do review** the code before exposting to the internet.
 Minimal effort has been invested in the security aspect of this project, since it is mostly intended for learning purposes as well as use it with sort of trusted parties.  
 The main security features is the implementation of mTLS functionality.
 
+## ai first review of authenticated path
+
+Scope and assumptions:
+* this review only covers requests that already passed mTLS authentication
+* full SQL is intentionally allowed
+* clients are allowed to read any data in the opened DuckDB database
+
 Basically use at your **own risk**.
+
+Findings:
+* **High**: read-only database mode is not a full SQL sandbox.
+  * Opening DuckDB with `?access_mode=read_only` protects the DB file from writes, but may still allow SQL features that interact with host files, extensions, or network depending on DuckDB/runtime configuration.
+* **Medium**: authenticated query-based denial of service is possible.
+  * A valid client can submit computationally expensive queries with no explicit per-query timeout, result size limit, memory budget, or concurrency limit.
+* **Medium**: `/query` accepts SQL via GET query string.
+  * This can enable browser-based request triggering (CSRF-style workload abuse) and query leakage in browser history or intermediary logs.
+* **Medium**: UI-side XSS risk if schema metadata is untrusted.
+  * Table/column names are injected into HTML using `innerHTML`; if names are attacker-controlled, script injection in the authenticated browser session may be possible.
+
+Recommended mitigations (while preserving full SQL intent):
+* run this service in a strongly sandboxed environment (container/VM with minimal filesystem and no sensitive host access)
+* configure DuckDB runtime hardening where possible (limit extension loading/network/file access)
+* add server-side resource controls: query timeout, max rows streamed, concurrency caps, and memory limits
+* move SQL submission to POST body for normal use (keep GET only if explicitly needed), and reduce logging of raw query strings
+* avoid `innerHTML` for schema rendering in the UI; render via DOM APIs and `textContent`
