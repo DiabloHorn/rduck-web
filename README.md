@@ -75,8 +75,8 @@ Scope and assumptions:
 Basically use at your **own risk**.
 
 Findings:
-* **High**: read-only database mode is not a full SQL sandbox.
-  * Opening DuckDB with `?access_mode=read_only` protects the DB file from writes, but may still allow SQL features that interact with host files, extensions, or network depending on DuckDB/runtime configuration.
+* ~~**High**: read-only database mode is not a full SQL sandbox.~~
+  * ~~Opening DuckDB with `?access_mode=read_only` protects the DB file from writes, but may still allow SQL features that interact with host files, extensions, or network depending on DuckDB/runtime configuration.~~
 * **Medium**: authenticated query-based denial of service is possible.
   * A valid client can submit computationally expensive queries with no explicit per-query timeout, result size limit, memory budget, or concurrency limit.
 * **Medium**: `/query` accepts SQL via GET query string.
@@ -90,3 +90,69 @@ Recommended mitigations (while preserving full SQL intent):
 * add server-side resource controls: query timeout, max rows streamed, concurrency caps, and memory limits
 * move SQL submission to POST body for normal use (keep GET only if explicitly needed), and reduce logging of raw query strings
 * avoid `innerHTML` for schema rendering in the UI; render via DOM APIs and `textContent`
+
+### DuckDB hardening verification queries
+
+Use the following SQL statements to verify each hardening measure at runtime.
+
+* Verify active hardening settings (should return the expected values):
+
+```sql
+SELECT name, value
+FROM duckdb_settings()
+WHERE name IN (
+  'access_mode',
+  'enable_external_access',
+  'autoload_known_extensions',
+  'autoinstall_known_extensions',
+  'allow_community_extensions',
+  'allow_unsigned_extensions',
+  'lock_configuration'
+)
+ORDER BY name;
+```
+
+Expected values:
+* `access_mode = read_only`
+* `enable_external_access = false`
+* `autoload_known_extensions = false`
+* `autoinstall_known_extensions = false`
+* `allow_community_extensions = false`
+* `allow_unsigned_extensions = false`
+* `lock_configuration = true`
+
+* Verify extension install is blocked (should fail):
+
+```sql
+INSTALL httpfs;
+```
+
+* Verify extension load is blocked unless built-in and permitted (should fail for unknown/not-available modules):
+
+```sql
+LOAD httpfs;
+```
+
+* Verify local file reads are blocked by external access hardening (should fail):
+
+```sql
+SELECT * FROM read_csv_auto('/etc/passwd') LIMIT 1;
+```
+
+* Verify network-based reads are blocked (should fail):
+
+```sql
+SELECT * FROM read_parquet('https://example.com/data.parquet') LIMIT 1;
+```
+
+* Verify configuration cannot be weakened at runtime (should fail):
+
+```sql
+SET enable_external_access = true;
+```
+
+* Verify normal query execution still works (should succeed):
+
+```sql
+SELECT 42 AS ok;
+```

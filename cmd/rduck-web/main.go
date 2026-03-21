@@ -15,6 +15,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -45,11 +46,17 @@ func main() {
 	}
 
 	dbPath := os.Args[1]
-	// Open the DuckDB database in read-only mode to prevent accidental data modifications
-	log.Printf("Loading database from: %s?access_mode=read_only", dbPath)
-	dsn := fmt.Sprintf("%s?access_mode=read_only", dbPath)
+	// Open DuckDB with read-only mode and hardened runtime options.
+	dsn := buildDuckDBDSN(dbPath)
+	log.Printf("Loading database from: %s", dsn)
 	db, err = sql.Open("duckdb", dsn)
 	if err != nil {
+		traceError(err)
+	}
+	if err := db.Ping(); err != nil {
+		traceError(err)
+	}
+	if err := applyDuckDBHardening(db); err != nil {
 		traceError(err)
 	}
 	defer db.Close()
@@ -83,6 +90,29 @@ func main() {
 		log.Println("Server starting on :8080...")
 		log.Fatal(plainserver.ListenAndServe())
 	*/
+}
+
+// buildDuckDBDSN returns a DSN that applies a baseline security posture for untrusted SQL.
+func buildDuckDBDSN(dbPath string) string {
+	params := url.Values{}
+	params.Set("access_mode", "read_only")
+	params.Set("enable_external_access", "false")
+	params.Set("autoload_known_extensions", "false")
+	params.Set("autoinstall_known_extensions", "false")
+	params.Set("allow_community_extensions", "false")
+	params.Set("allow_unsigned_extensions", "false")
+
+	return fmt.Sprintf("%s?%s", dbPath, params.Encode())
+}
+
+// applyDuckDBHardening locks configuration to avoid runtime weakening after startup.
+func applyDuckDBHardening(db *sql.DB) error {
+	_, err := db.Exec("SET lock_configuration = true")
+	if err != nil {
+		return fmt.Errorf("failed to lock DuckDB configuration: %w", err)
+	}
+
+	return nil
 }
 
 // traceError logs a fatal error with stack trace information (function name, file, line number)
