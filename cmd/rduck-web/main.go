@@ -64,6 +64,12 @@ func main() {
 		Addr:      "127.0.0.1:8443",
 		Handler:   mux,
 		TLSConfig: tlsConfig,
+		// Basic transport-level hardening against slow-client/connection exhaustion.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
 
 	log.Println("Server running on https://127.0.0.1:8443")
