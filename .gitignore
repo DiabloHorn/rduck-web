@@ -10,3 +10,6 @@ certs/
 
 # Ignore .DS_Store files (macOS)
 **/.DS_Store
+
+# Ignore the /dist directory which may contain build artifacts
+/dist

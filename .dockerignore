@@ -1,0 +1,21 @@
+# VCS and editor metadata
+.git
+.gitignore
+.vscode/
+.DS_Store
+
+# Local build outputs
+bin/
+dist/
+/rduck-web
+
+# Runtime/generated cert material (not needed to compile)
+certs/
+
+# Local docs and helper scripts not required for go build
+README.md
+LICENSE
+example-curl.sh
+export-client.sh
+revoke-client.sh
+build-binary.sh
