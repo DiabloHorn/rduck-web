@@ -11,12 +11,19 @@ A simple project to remotely query duckdb databases via HTTP to quickly access t
 * revoke client certs
 
 # Building
-You can build the binary with:  
+Quick and dirty build (keeps things simple when you just need one local binary):  
 * `go build -o rduck-web cmd/rduck-web/main.go`
+
+Scripted multi-target build via Docker + native Darwin build:  
+* Linux binaries only (default): `./build-binary.sh`
+  * outputs `./dist/rduck-web-linux-amd64` and `./dist/rduck-web-linux-arm64`
+* Linux + macOS arm64: `./build-binary.sh -build-darwin`
+  * adds `./dist/rduck-web-darwin-arm64`
 
 # Running
 You can it on the specified DuckDB database with:  
 * `./rduck-web <duckdb_location.db>`
+* If you used `./build-binary.sh`, run the matching binary from `./dist/` instead.
 
 # Setting up client access
 Since we implement mTLS we need to provide the client with the right cryptographic material.
