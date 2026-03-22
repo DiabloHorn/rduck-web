@@ -142,7 +142,7 @@ func setupPKI() (*tls.Config, error) {
 			return nil, err
 		}
 		// Initialize empty revocation list file with instructions
-		os.WriteFile(revocationFile, []byte("# Add serial numbers here to revoke (one per line)\n"), 0644)
+		os.WriteFile(revocationFile, []byte("# Add serial numbers here to revoke (one per line)\n"), 0600)
 	}
 
 	// Load revoked certificate serial numbers into memory for fast validation lookups
@@ -193,9 +193,9 @@ func setupPKI() (*tls.Config, error) {
 // generateAllCerts creates the complete PKI: a root CA, one server certificate, and 10 client certificates.
 // All certificates are stored in PEM format in the base directory structure.
 func generateAllCerts(base string) error {
-	os.MkdirAll(filepath.Join(base, "root"), 0755)
-	os.MkdirAll(filepath.Join(base, "server"), 0755)
-	os.MkdirAll(filepath.Join(base, "clients"), 0755)
+	os.MkdirAll(filepath.Join(base, "root"), 0700)
+	os.MkdirAll(filepath.Join(base, "server"), 0700)
+	os.MkdirAll(filepath.Join(base, "clients"), 0700)
 
 	// 1. Generate Root Certificate Authority (CA)
 	// The CA signs all other certificates and is trusted by clients for verification
@@ -269,15 +269,17 @@ func generateAllCerts(base string) error {
 	return nil
 }
 
-// savePEM writes certificate bytes to a PEM-encoded file
+// savePEM writes certificate bytes to a PEM-encoded file with 0600 permissions (owner read/write only).
 func savePEM(path, t string, b []byte) {
-	f, _ := os.Create(path)
+	f, _ := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	defer f.Close()
 	pem.Encode(f, &pem.Block{Type: t, Bytes: b})
 }
 
-// saveKey saves an RSA private key to a PEM-encoded file
+// saveKey saves an RSA private key to a PEM-encoded file with 0600 permissions (owner read/write only).
 func saveKey(path string, k *rsa.PrivateKey) {
-	f, _ := os.Create(path)
+	f, _ := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	defer f.Close()
 	pem.Encode(f, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})
 }
 
