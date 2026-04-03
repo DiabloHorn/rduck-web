@@ -1,4 +1,4 @@
-module duckdb-rawquery
+module rduck-web
 
 go 1.24.0
 

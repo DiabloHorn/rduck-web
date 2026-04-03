@@ -13,9 +13,12 @@ RUN go mod download
 # 5. Copy the rest of the source code
 COPY . .
 
-# 6. Compile the binary
-RUN CGO_ENABLED=1 go build -o /out/rduck-web ./cmd/rduck-web
+# 6. Compile the binary (static build for minimal final image)
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /out/rduck-web ./cmd/rduck-web
 
-# 7. Export only the compiled binary as the final stage
-FROM scratch AS binary
-COPY --from=builder /out/rduck-web /
+# 7. Minimal runtime image with CA certs for TLS
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/rduck-web /usr/local/bin/rduck-web
+EXPOSE 8443
+ENTRYPOINT ["rduck-web"]

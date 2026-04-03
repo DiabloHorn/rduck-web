@@ -271,25 +271,40 @@ func generateAllCerts(base string) error {
 
 // savePEM writes certificate bytes to a PEM-encoded file with 0600 permissions (owner read/write only).
 func savePEM(path, t string, b []byte) {
-	f, _ := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		log.Fatalf("failed to create %s: %v", path, err)
+	}
 	defer f.Close()
-	pem.Encode(f, &pem.Block{Type: t, Bytes: b})
+	if err := pem.Encode(f, &pem.Block{Type: t, Bytes: b}); err != nil {
+		log.Fatalf("failed to write PEM to %s: %v", path, err)
+	}
 }
 
 // saveKey saves an RSA private key to a PEM-encoded file with 0600 permissions (owner read/write only).
 func saveKey(path string, k *rsa.PrivateKey) {
-	f, _ := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		log.Fatalf("failed to create %s: %v", path, err)
+	}
 	defer f.Close()
-	pem.Encode(f, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})
+	if err := pem.Encode(f, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)}); err != nil {
+		log.Fatalf("failed to write key to %s: %v", path, err)
+	}
 }
 
 // handleQuery executes SQL queries and streams results as newline-delimited JSON (NDJSON).
 // This enables real-time result streaming for large result sets.
+// Accepts SQL via GET query parameter or POST form body.
 func handleQuery(w http.ResponseWriter, r *http.Request) {
-	// Extract SQL query from URL parameter
+	// Extract SQL query from GET parameter or POST body
 	query := r.URL.Query().Get("sql")
+	if query == "" && r.Method == http.MethodPost {
+		r.ParseForm()
+		query = r.FormValue("sql")
+	}
 	if query == "" {
-		http.Error(w, "Missing 'sql' parameter", 400)
+		http.Error(w, "Missing 'sql' parameter (use ?sql= or POST body)", 400)
 		return
 	}
 
@@ -338,11 +353,11 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 			f.Flush() // Push data to client immediately
 		}
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("Row iteration error: %v", err)
+	}
 }
 
-// handleUI returns a minimal HTML/CSS/JavaScript web interface for querying DuckDB.
-// It automatically loads the schema (tables and columns) in the sidebar and provides
-// a SQL editor with live results.
 // handleUI returns a minimal HTML/CSS/JavaScript web interface for querying DuckDB.
 // It automatically loads the schema (tables and columns) in the sidebar and provides
 // a SQL editor with live results.
@@ -415,18 +430,21 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 								const lines = buffer.split("\n");
 								buffer = lines.pop();
 
-								lines.forEach(line => {
-									if (!line.trim()) return;
-									const row = JSON.parse(line);
-									if (row.table_name !== currentTable) {
-										currentTable = row.table_name;
-										html += '<div class="table-group"><span class="table-name" onclick="setQuery(\''+currentTable+'\')">' + currentTable + '</span>';
-									}
-									html += '<div class="column-name">' + row.column_name + '</div>';
-									if (lines.indexOf(line) === lines.length - 1) html += '</div>';
-								});
-							}
-							list.innerHTML = html || "No user tables.";
+							lines.forEach(line => {
+								if (!line.trim()) return;
+								const row = JSON.parse(line);
+								if (row.table_name !== currentTable) {
+									if (currentTable) html += '</div>';
+									currentTable = row.table_name;
+									const safeName = currentTable.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;');
+									html += '<div class="table-group"><span class="table-name" onclick="setQuery(this.dataset.name)" data-name="' + safeName + '">' + safeName + '</span>';
+								}
+								const safeCol = String(row.column_name).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+								html += '<div class="column-name">' + safeCol + '</div>';
+							});
+							if (currentTable) html += '</div>';
+						}
+						list.innerHTML = html || "No user tables.";
 						} catch (e) { list.innerHTML = "Error loading schema."; }
 					}
 
